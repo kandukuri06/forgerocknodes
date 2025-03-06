@@ -1,0 +1,32 @@
+function uuidv4() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+
+var device = {
+	"lastSelectedDate": new Date().getTime(),
+	"devicePrint": JSON.parse(String(sharedState.get("devicePrint"))),
+	"name": String(sharedState.get("deviceName")),
+	"selectionCounter": 1,
+	"uuid": uuidv4()
+}
+
+logger.message("New device: " + JSON.stringify(device));
+
+sharedState.put("devicePrintProfile", JSON.stringify(device));
+
+var uname = new String(sharedState.get("username"));
+var attribute = "devicePrintProfiles"
+
+var devicePrintProfiles = idRepository.getAttribute(uname, attribute);
+logger.error("LDAP Value devicePrintProfiles = "+devicePrintProfiles);
+logger.error("devicePrintProfiles Value to Update in LDAP " + JSON.stringify(device));
+
+// Add a value as a String.
+//idRepository.setAttribute(uname, attribute, [JSON.stringify(device)])
+idRepository.addAttribute(uname, attribute, JSON.stringify(device))
+
+outcome = "true";
