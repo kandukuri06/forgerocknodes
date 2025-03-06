@@ -1,4 +1,4 @@
-/* Prod
+/*
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS HEADER.
  *
  * Copyright (c) 2009 Sun Microsystems Inc. All Rights Reserved
@@ -25,14 +25,14 @@
  */
 /*
  * Portions Copyrighted 2013 Syntegrity.
- * Portions Copyrighted 2013-2018 ForgeRock AS.
+ * Portions Copyrighted 2013-2015 ForgeRock AS.
  */
 
 var ScalarComparator = {}, ScreenComparator = {}, MultiValueComparator = {}, UserAgentComparator = {}, GeolocationComparator = {};
 
 var config = {
     profileExpiration: 30,              //in days
-    maxProfilesAllowed: 10,
+    maxProfilesAllowed: 5,
     maxPenaltyPoints: 0,
     attributes: {
         screen: {
@@ -85,7 +85,7 @@ var config = {
             required: false,
             comparator: GeolocationComparator,
             args: {
-                allowedRange: 10000,      //in miles
+                allowedRange: 100,			//in miles
                 penaltyPoints: 100
             }
         }
@@ -244,9 +244,11 @@ ScalarComparator.compare = function (currentValue, storedValue, config) {
  * @return ComparisonResult
  */
 ScreenComparator.compare = function (currentValue, storedValue, config) {
+    if (logger.messageEnabled()) {
         logger.message("ScreenComparator.compare:currentValue: " + JSON.stringify(currentValue));
         logger.message("ScreenComparator.compare:storedValue: " + JSON.stringify(storedValue));
         logger.message("ScreenComparator.compare:config: " + JSON.stringify(config));
+    }
 
     if (nullOrUndefined(currentValue)) {
         currentValue = {screenWidth: null, screenHeight: null, screenColourDepth: null};
@@ -363,10 +365,6 @@ UserAgentComparator.compare = function (currentValue, storedValue, config) {
         logger.message("UserAgentComparator.compare:storedValue: " + JSON.stringify(storedValue));
         logger.message("UserAgentComparator.compare:config: " + JSON.stringify(config));
     }
-
-    // Handle empty strings
-    currentValue = (currentValue === "" || nullOrUndefined(currentValue)) ? null : currentValue.replace(/[\d\.]+/g, "").trim();
-    storedValue = (storedValue === "" || nullOrUndefined(storedValue)) ? null : storedValue.replace(/[\d\.]+/g, "").trim();
 
     if (config.ignoreVersion) {
         // remove version number
@@ -667,7 +665,6 @@ function hasRequiredAttributes(devicePrint, attributeConfig) {
 function compareDevicePrintProfiles(attributeConfig, devicePrint, devicePrintProfiles, maxPenaltyPoints) {
 
     var attributePaths = getDevicePrintAttributePaths(attributeConfig),
-        dao = sharedState.get('_DeviceIdDao'),
         results,
         j,
         aggregatedComparisonResult,
@@ -678,17 +675,16 @@ function compareDevicePrintProfiles(attributeConfig, devicePrint, devicePrintPro
         comparisonResult,
         selectedComparisonResult,
         selectedProfile,
-        curDevicePrintProfile,
         vals;
 
     results = [];
     for (j = 0; j < devicePrintProfiles.length; j++) {
-        curDevicePrintProfile = devicePrintProfiles[j];
+
         aggregatedComparisonResult = new ComparisonResult();
         for (i = 0; i < attributePaths.length; i++) {
 
             currentValue = getValue(devicePrint, attributePaths[i]);
-            storedValue = getValue(curDevicePrintProfile.devicePrint, attributePaths[i]);
+            storedValue = getValue(devicePrintProfiles[j].devicePrint, attributePaths[i]);
             attrConfig = getValue(attributeConfig, attributePaths[i]);
 
             if (storedValue === null) {
@@ -697,11 +693,12 @@ function compareDevicePrintProfiles(attributeConfig, devicePrint, devicePrintPro
                 comparisonResult = attrConfig.comparator.compare(currentValue, storedValue, attrConfig.args);
             }
 
-            logger.message("Comparing attribute path: " + attributePaths[i]
+            if (logger.messageEnabled()) {
+                logger.message("Comparing attribute path: " + attributePaths[i]
                     + ", Comparison result: successful=" + comparisonResult.isSuccessful() + ", penaltyPoints="
                     + comparisonResult.penaltyPoints + ", additionalInfoInCurrentValue="
                     + comparisonResult.additionalInfoInCurrentValue);
-
+            }
             aggregatedComparisonResult.addComparisonResult(comparisonResult);
         }
         if (logger.messageEnabled()) {
@@ -717,7 +714,6 @@ function compareDevicePrintProfiles(attributeConfig, devicePrint, devicePrintPro
         });
     }
 
-  	//logger.message("RESULTS " + results);
     if (results.length === 0) {
         return null;
     }
@@ -735,8 +731,10 @@ function compareDevicePrintProfiles(attributeConfig, devicePrint, devicePrintPro
     selectedProfile = null;
     if (selectedComparisonResult.penaltyPoints <= maxPenaltyPoints) {
         selectedProfile = results[0].value;
+        if (logger.messageEnabled()) {
             logger.message("Selected profile: " + JSON.stringify(selectedProfile) +
                 " with " + selectedComparisonResult.penaltyPoints + " penalty points");
+        }
     }
 
     if (selectedProfile === null) {
@@ -744,18 +742,17 @@ function compareDevicePrintProfiles(attributeConfig, devicePrint, devicePrintPro
     }
 
     /* update profile */
-    selectedProfile.selectionCounter =
-        java.lang.Integer.valueOf(parseInt(selectedProfile.selectionCounter, 10) + 1);
+    selectedProfile.selectionCounter = selectedProfile.selectionCounter + 1;
     selectedProfile.lastSelectedDate = new Date().getTime();
     selectedProfile.devicePrint = devicePrint;
 
     vals = [];
     for (i = 0; i < devicePrintProfiles.length; i++) {
-        vals.push(JSON.stringify(JSON.parse(org.forgerock.json.JsonValue.json(devicePrintProfiles[i]))));
+        vals.push(JSON.stringify(devicePrintProfiles[i]));
     }
 
-    //putting an array of devicePrintProfile strings in sharedState
-  	sharedState.put("devicePrintProfiles", vals);
+    idRepository.setAttribute(username, "devicePrintProfiles", vals);
+
     return true;
 }
 
@@ -763,7 +760,7 @@ function matchDevicePrint() {
 
     if (!username) {
         logger.error("Username not set. Cannot compare user's device print profiles.");
-        outcome = "error";
+        authState = FAILED;
     } else {
 
         if (logger.messageEnabled()) {
@@ -784,67 +781,45 @@ function matchDevicePrint() {
 
                 function getNotExpiredProfiles() {
                     var profile,
-                        dao = sharedState.get('_DeviceIdDao'),
                         results = [],
-                        profiles,
+                        profiles = idRepository.getAttribute(username, "devicePrintProfiles"),
                         iter;
-
-
-                    profiles = JSON.parse(sharedState.get("devicePrintProfiles"));
-                    logger.message("devicePrintProfiles: " + JSON.stringify(profiles));
-
-
-                  	if (profiles) {
-                      for (var i=0; i< profiles.length; i++) {
-                        	if (!isExpiredProfile(profiles[i])) {
-                            	results.push(profiles[i]);
-	                        }
-	                    }
+                
+                    if (profiles) {
+                        iter = profiles.iterator();
+                        
+                        while (iter.hasNext()) {
+                            profile = JSON.parse(iter.next());
+                            if (!isExpiredProfile(profile)) {
+                                results.push(profile);
+                            }
+                        }
                     }
-
                     if (logger.messageEnabled()) {
-                        logger.message("stored non-expired profiles: " + results);
-                    }
+                        logger.message("stored non-expired profiles: " + JSON.stringify(results));
+                    }                    
                     return results;
                 }
 
                 return getNotExpiredProfiles();
             },
-            devicePrint;
-
-        // Handle malformed JSON
-        try {
-            devicePrint = JSON.parse(clientScriptOutputData);
-        } catch (e) {
-            logger.error("Malformed JSON in clientScriptOutputData: " + e.message);
-            outcome = "error";
-            return;
-        }
-
-        var devicePrintProfiles = getProfiles();
+            devicePrint = JSON.parse(clientScriptOutputData),
+            devicePrintProfiles = getProfiles();
 
         if (!hasRequiredAttributes(devicePrint, config.attributes)) {
             logger.message("devicePrint.hasRequiredAttributes: false");
             // Will fail this module but fall-through to next module. Which should be OTP.
-            outcome = "error";
+            authState = FAILED;
         } else if (compareDevicePrintProfiles(config.attributes, devicePrint, devicePrintProfiles, config.maxPenaltyPoints)) {
             logger.message("devicePrint.hasValidProfile: true");
-            outcome = "matched";
+            authState = SUCCESS;
         } else {
             logger.message("devicePrint.hasValidProfile: false");
+            sharedState.put('devicePrintProfile', JSON.stringify(devicePrint));
             // Will fail this module but fall-through to next module. Which should be OTP.
-            outcome = "not matched";
+            authState = FAILED;
         }
     }
-}
-
-username = sharedState.get("username");
-realm = sharedState.get("realm");
-clientScriptOutputData = sharedState.get("devicePrint");
-
-// Check for invalid configurations
-if (nullOrUndefined(config) || typeof config.penaltyPoints !== 'number') {
-    throw new Error("Invalid configuration: 'penaltyPoints' must be a number.");
 }
 
 matchDevicePrint();
