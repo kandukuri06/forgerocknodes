@@ -25,15 +25,16 @@ package org.forgerock.openam.auth.nodes;
 import com.google.inject.assistedinject.Assisted;
 import com.sun.identity.authentication.callbacks.HiddenValueCallback;
 import com.sun.identity.authentication.callbacks.ScriptTextOutputCallback;
-import com.sun.identity.shared.debug.Debug;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import org.forgerock.json.JsonValue;
 import org.forgerock.openam.annotations.sm.Attribute;
 import org.forgerock.openam.auth.node.api.*;
-import org.forgerock.openam.scripting.Script;
-import org.forgerock.openam.scripting.ScriptConstants;
-import org.forgerock.openam.scripting.service.ScriptConfiguration;
+import org.forgerock.openam.scripting.domain.Script;
+import org.forgerock.openam.scripting.persistence.config.consumer.ScriptContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.security.auth.callback.Callback;
 import java.util.Optional;
 import static org.forgerock.openam.auth.node.api.Action.send;
@@ -49,8 +50,9 @@ import javax.inject.Inject;
 public class ClientScriptNode extends SingleOutcomeNode {
 
     private final static String DEBUG_FILE = "ClientScriptNode";
-    protected Debug debug = Debug.getInstance(DEBUG_FILE);
+    private final Logger logger = LoggerFactory.getLogger(ClientScriptNode.class);
     private static final String BUNDLE = "org/forgerock/openam/auth/nodes/ClientScriptNode";
+    //add this for client_side_script = AUTHENTICATION_CLIENT_SIDE
 
     /**
      * Configuration for the node.
@@ -61,8 +63,8 @@ public class ClientScriptNode extends SingleOutcomeNode {
          * @return the amount.
          */
         @Attribute(order = 100)
-        @Script(ScriptConstants.AUTHENTICATION_CLIENT_SIDE_NAME)
-        ScriptConfiguration script();
+        @ScriptContext("AUTHENTICATION_TREE_DECISION_NODE")
+        default Script script() {return Script.EMPTY_SCRIPT;};
 
         @Attribute(order = 200)
         String scriptResult();
@@ -86,10 +88,15 @@ public class ClientScriptNode extends SingleOutcomeNode {
         if (result.isPresent()) {
             JsonValue newSharedState = context.sharedState.copy();
             newSharedState.put(config.scriptResult(), result.get());
+            logger.debug("[" + DEBUG_FILE + "]" +
+                    "Script result is:\n" + result.get());
             return goToNext().replaceSharedState(newSharedState).build();
         } else {
         	String clientSideScriptExecutorFunction = createClientSideScriptExecutorFunction(config.script().getScript(), config.scriptResult(),
                     true, context.sharedState.toString());
+        	 logger.debug("[" + DEBUG_FILE + "] " +
+                     "script is:\n" + clientSideScriptExecutorFunction + "\n" +
+                     "result name: " + config.scriptResult());
             ScriptTextOutputCallback scriptAndSelfSubmitCallback =
                     new ScriptTextOutputCallback(clientSideScriptExecutorFunction);
 
